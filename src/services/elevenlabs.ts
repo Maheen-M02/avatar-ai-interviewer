@@ -38,20 +38,61 @@ export class ElevenLabsService {
     voiceId: string = VOICE_ID,
     language: string = 'en'
   ): Promise<TTSResponse> {
-    // Mock implementation - in production, call the actual ElevenLabs API
-    console.log(`TTS Request: "${text}" in ${language} with voice ${voiceId}`);
-    
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // Generate a real audio blob using Web Speech API for demo
-    const mockAudio = await this.generateSpeechAudio(text, language);
-    const mockVisemes = this.generateMockVisemes(text);
-    
-    return {
-      audio: mockAudio,
-      visemes: mockVisemes
-    };
+    try {
+      console.log(`ElevenLabs TTS Request: "${text}" with voice ${voiceId} in ${language}`);
+      
+      // Prepare the request payload
+      const requestBody = {
+        text: text,
+        model_id: "eleven_multilingual_v2",
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.8,
+          style: 0.0,
+          use_speaker_boost: true
+        }
+      };
+
+      // Make the API call to ElevenLabs
+      const response = await fetch(`${ELEVENLABS_BASE_URL}/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'audio/mpeg',
+          'Content-Type': 'application/json',
+          'xi-api-key': ELEVENLABS_API_KEY
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        throw new Error(`ElevenLabs API error: ${response.status} ${response.statusText}`);
+      }
+
+      // Get the audio blob
+      const audioBlob = await response.blob();
+      console.log(`TTS Success: Generated ${audioBlob.size} bytes of audio`);
+      
+      // Generate mock visemes for lip-sync (real visemes require a separate API call)
+      const mockVisemes = this.generateMockVisemes(text);
+      
+      return {
+        audio: audioBlob,
+        visemes: mockVisemes
+      };
+      
+    } catch (error) {
+      console.error('ElevenLabs TTS Error:', error);
+      
+      // Fallback to Web Speech API if ElevenLabs fails
+      console.log('Falling back to Web Speech API...');
+      const fallbackAudio = await this.generateSpeechAudio(text, language);
+      const mockVisemes = this.generateMockVisemes(text);
+      
+      return {
+        audio: fallbackAudio,
+        visemes: mockVisemes
+      };
+    }
   }
 
   static async speechToText(audioBlob: Blob, language: string = 'en'): Promise<string> {
@@ -93,19 +134,45 @@ export class ElevenLabsService {
   }
 
   private static generateMockVisemes(text: string): any[] {
-    // Generate mock viseme data for lip-sync animation
+    // Generate mock viseme data for lip-sync animation based on text
     const words = text.split(' ');
     const visemes = [];
     let timeOffset = 0;
     
-    words.forEach((word, index) => {
-      const duration = word.length * 100 + Math.random() * 200; // Mock duration
-      visemes.push({
-        time: timeOffset,
-        value: Math.floor(Math.random() * 10), // Random viseme ID (0-9)
-        duration: duration
+    words.forEach((word) => {
+      // Create visemes for each phoneme-like unit in the word
+      const phonemes = word.toLowerCase().replace(/[^a-z]/g, '').split('');
+      
+      phonemes.forEach((char) => {
+        // Map characters to viseme IDs (simplified phoneme mapping)
+        let visemeId = 0;
+        
+        // Vowels
+        if ('aeiou'.includes(char)) {
+          visemeId = Math.floor(Math.random() * 3) + 1; // Visemes 1-3 for vowels
+        }
+        // Consonants
+        else if ('bcdfghjklmnpqrstvwxyz'.includes(char)) {
+          if ('bmp'.includes(char)) visemeId = 4; // Bilabial
+          else if ('fv'.includes(char)) visemeId = 5; // Labiodental
+          else if ('tdnl'.includes(char)) visemeId = 6; // Alveolar
+          else if ('kg'.includes(char)) visemeId = 7; // Velar
+          else visemeId = 8; // Other consonants
+        }
+        
+        const duration = Math.random() * 150 + 100; // 100-250ms per phoneme
+        
+        visemes.push({
+          time: timeOffset,
+          value: visemeId,
+          duration: duration
+        });
+        
+        timeOffset += duration;
       });
-      timeOffset += duration;
+      
+      // Add a brief pause between words
+      timeOffset += 50;
     });
     
     return visemes;
@@ -209,34 +276,50 @@ export class ElevenLabsService {
     visemes: any[], 
     onViseme?: (viseme: any) => void
   ): Promise<void> {
-    // For demo, just run viseme animation without actual audio
     return new Promise((resolve) => {
-      if (visemes && onViseme) {
-        let visemeIndex = 0;
-        const startTime = Date.now();
+      // Create audio element and play the actual ElevenLabs audio
+      const audio = new Audio(URL.createObjectURL(audioBlob));
+      
+      audio.addEventListener('loadeddata', () => {
+        console.log('Audio loaded, starting playback with visemes');
         
-        const visemeTimer = setInterval(() => {
-          const elapsed = Date.now() - startTime;
+        if (visemes && onViseme) {
+          // Sync visemes with audio playback
+          let visemeIndex = 0;
+          const startTime = Date.now();
           
-          if (visemeIndex < visemes.length && elapsed >= visemes[visemeIndex].time) {
-            onViseme(visemes[visemeIndex]);
-            visemeIndex++;
-          }
-          
-          if (visemeIndex >= visemes.length) {
-            clearInterval(visemeTimer);
-            resolve();
-          }
-        }, 50);
-
-        // Auto-resolve after a reasonable time
-        setTimeout(() => {
-          resolve();
-        }, Math.max(3000, visemes.length * 200));
-      } else {
-        // No visemes, just wait a bit
-        setTimeout(resolve, 2000);
-      }
+          const visemeTimer = setInterval(() => {
+            const elapsed = Date.now() - startTime;
+            
+            if (visemeIndex < visemes.length && elapsed >= visemes[visemeIndex].time) {
+              onViseme(visemes[visemeIndex]);
+              visemeIndex++;
+            }
+            
+            if (visemeIndex >= visemes.length || audio.ended) {
+              clearInterval(visemeTimer);
+            }
+          }, 50);
+        }
+      });
+      
+      audio.addEventListener('ended', () => {
+        console.log('Audio playback completed');
+        URL.revokeObjectURL(audio.src);
+        resolve();
+      });
+      
+      audio.addEventListener('error', (e) => {
+        console.error('Audio playback error:', e);
+        URL.revokeObjectURL(audio.src);
+        resolve();
+      });
+      
+      // Start audio playback
+      audio.play().catch((error) => {
+        console.error('Failed to play audio:', error);
+        resolve();
+      });
     });
   }
 }
