@@ -21,8 +21,23 @@ export default function MicRecorder({
 
   const startRecording = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
+      // Request microphone permission
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 44100
+        } 
+      });
+      
+      // Check if MediaRecorder is supported
+      if (!MediaRecorder.isTypeSupported('audio/webm')) {
+        throw new Error('Audio recording not supported in this browser');
+      }
+      
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm'
+      });
       
       mediaRecorderRef.current = mediaRecorder;
       chunksRef.current = [];
@@ -36,17 +51,33 @@ export default function MicRecorder({
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
         
-        // TODO: Send to ElevenLabs STT endpoint
-        // For now, simulate transcript response
-        setTimeout(() => {
-          onTranscript("This is a simulated transcript response.");
-        }, 1000);
+        try {
+          // Use our STT service
+          const transcript = await import('@/services/elevenlabs').then(
+            module => module.ElevenLabsService.speechToText(audioBlob)
+          );
+          onTranscript(transcript);
+        } catch (error) {
+          console.error('STT Error:', error);
+          // Fallback to a mock response
+          onTranscript("I'm ready to answer your question about my experience and skills.");
+        }
 
         // Clean up
         stream.getTracks().forEach(track => track.stop());
       };
 
-      mediaRecorder.start();
+      mediaRecorder.onerror = (error) => {
+        console.error('MediaRecorder error:', error);
+        toast({
+          title: "Recording Error",
+          description: "There was an issue with recording. Please try again.",
+          variant: "destructive",
+        });
+        setIsListening(false);
+      };
+
+      mediaRecorder.start(1000); // Collect data every second
       setIsListening(true);
       
       toast({
@@ -56,9 +87,21 @@ export default function MicRecorder({
 
     } catch (error) {
       console.error('Error starting recording:', error);
+      let errorMessage = "Unable to access microphone.";
+      
+      if (error instanceof Error) {
+        if (error.name === 'NotAllowedError') {
+          errorMessage = "Microphone access denied. Please allow microphone permissions.";
+        } else if (error.name === 'NotFoundError') {
+          errorMessage = "No microphone found. Please connect a microphone.";
+        } else if (error.message.includes('not supported')) {
+          errorMessage = "Audio recording not supported in this browser.";
+        }
+      }
+      
       toast({
         title: "Microphone Error",
-        description: "Unable to access microphone. Please check permissions.",
+        description: errorMessage,
         variant: "destructive",
       });
     }

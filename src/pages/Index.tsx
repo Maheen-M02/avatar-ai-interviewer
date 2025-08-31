@@ -153,6 +153,12 @@ export default function Index() {
   const speakQuestion = useCallback(async (question: string) => {
     try {
       setIsSpeaking(true);
+      
+      toast({
+        title: "AI Speaking",
+        description: "The interviewer is asking a question...",
+      });
+      
       const response = await ElevenLabsService.textToSpeech(question, undefined, selectedLanguage);
       
       if (response.visemes) {
@@ -167,8 +173,19 @@ export default function Index() {
           console.log('Viseme:', viseme);
         }
       );
+      
+      toast({
+        title: "Your Turn",
+        description: "Click the microphone to respond",
+      });
+      
     } catch (error) {
       console.error('Error speaking question:', error);
+      toast({
+        title: "Speech Error",
+        description: "Unable to speak the question. You can still read it above.",
+        variant: "destructive"
+      });
     } finally {
       setIsSpeaking(false);
     }
